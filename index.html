@@ -1,0 +1,1541 @@
+<!doctype html>
+<html lang="bg">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>DOM Slither — Ultimate</title>
+</head>
+<body>
+<script>
+(() => {
+  // =========================
+  // Error box (no console needed)
+  // =========================
+  window.addEventListener("error", (e) => {
+    const box = document.createElement("div");
+    box.style.position = "fixed";
+    box.style.left = "16px";
+    box.style.bottom = "16px";
+    box.style.zIndex = "999999";
+    box.style.maxWidth = "760px";
+    box.style.padding = "12px 14px";
+    box.style.borderRadius = "14px";
+    box.style.background = "rgba(255,60,60,0.14)";
+    box.style.border = "1px solid rgba(255,60,60,0.35)";
+    box.style.color = "#fff";
+    box.style.fontFamily = "ui-monospace, SFMono-Regular, Menlo, monospace";
+    box.style.whiteSpace = "pre-wrap";
+    box.textContent =
+      "JS Error:\n" + (e.message || "Unknown") +
+      "\n" + (e.filename || "") + ":" + (e.lineno || "");
+    document.body.appendChild(box);
+  });
+
+  // =========================
+  // Helpers
+  // =========================
+  const rand = (min, max) => Math.random() * (max - min) + min;
+  const randi = (min, max) => Math.floor(rand(min, max + 1));
+  const clamp = (v, min, max) => Math.max(min, Math.min(max, v));
+  const dist2 = (ax, ay, bx, by) => {
+    const dx = ax - bx, dy = ay - by;
+    return dx * dx + dy * dy;
+  };
+  const hsl = (h, s, l) => `hsl(${((h%360)+360)%360} ${s}% ${l}%)`;
+  const now = () => performance.now();
+  const angleNorm = (a) => Math.atan2(Math.sin(a), Math.cos(a));
+  const lsGet = (k, fallback) => { try { const v = localStorage.getItem(k); return v ?? fallback; } catch { return fallback; } };
+  const lsSet = (k, v) => { try { localStorage.setItem(k, String(v)); } catch {} };
+
+  // =========================
+  // Inject CSS animations
+  // =========================
+  const style = document.createElement("style");
+  style.textContent = `
+    @keyframes glowPulse {
+      0%   { filter: brightness(1) drop-shadow(0 0 10px rgba(255,255,255,.10)); }
+      50%  { filter: brightness(1.08) drop-shadow(0 0 18px rgba(255,255,255,.18)); }
+      100% { filter: brightness(1) drop-shadow(0 0 10px rgba(255,255,255,.10)); }
+    }
+    @keyframes floatIn {
+      from { opacity: 0; transform: translateY(8px); }
+      to   { opacity: 1; transform: translateY(0); }
+    }
+  `;
+  document.head.appendChild(style);
+
+  // =========================
+  // Base Config (defaults)
+  // =========================
+  const BASE = {
+    // World
+    worldW: 4600,
+    worldH: 3000,
+    padding: 45,
+
+    // Rendering
+    gridSize: 54,
+
+    // Snake
+    segSize: 12,
+    segSpacing: 9.5,
+    headRadius: 9,
+    initialLen: 28,
+    aiLen: 22,
+
+    // Movement
+    baseSpeed: 140,
+    boostSpeed: 235,
+    turnSpeed: 7.2,
+
+    // Boost behavior
+    boostDropEveryMs: 90,
+    boostCostEveryMs: 220,
+
+    // Food (settings override)
+    foodTarget: 420,
+    foodMinSize: 4,
+    foodMaxSize: 8,
+    eatRadius: 12,
+
+    // AI (settings override)
+    aiCount: 8,
+    aiAggro: 0.58,
+    aiAvoid: 0.95,
+    aiThinkEveryMs: [80, 170],
+
+    // Death/Respawn
+    maxFoodOnDeath: 65,
+    respawnDelayMs: 850,
+
+    // Powerups (MORE + BIGGER)
+    powerupCount: 12,
+    powerupSize: 28,
+    powerupDurationMs: 10000,
+
+    // Particles
+    particleCountOnDeath: 30,
+    sparkleTrailEveryMs: 55,
+
+    // Zoom
+    zoomMin: 0.78,
+    zoomMax: 1.22,
+    zoomLerp: 0.08,
+
+    // FPS
+    fpsSmoothing: 0.08,
+  };
+
+  // Runtime config (gets replaced by settings)
+  let CFG = { ...BASE };
+
+  // =========================
+  // Skins (with extras)
+  // pattern: solid | stripe | mono | gradient
+  // glowPulse: true/false
+  // sparkle: true/false (trail on boost)
+  // =========================
+  const SKINS = [
+    { id: "neon_blue",   name: "Neon Blue",    hue: 200, pattern: "solid",    glowPulse: true,  sparkle: false },
+    { id: "royal_purple",name: "Royal Purple", hue: 275, pattern: "solid",    glowPulse: true,  sparkle: false },
+    { id: "toxic_green", name: "Toxic Green",  hue: 120, pattern: "stripe",   glowPulse: true,  sparkle: false },
+    { id: "sunset",      name: "Sunset",       hue: 18,  pattern: "stripe",   glowPulse: true,  sparkle: false },
+    { id: "ice",         name: "Ice",          hue: 185, pattern: "stripe",   glowPulse: false, sparkle: false },
+    { id: "crimson",     name: "Crimson",      hue: 350, pattern: "solid",    glowPulse: true,  sparkle: false },
+
+    // EXTRA SKINS
+    { id: "gold_lux",    name: "Gold Lux",     hue: 46,  pattern: "stripe",   glowPulse: true,  sparkle: true  },
+    { id: "pink_pop",    name: "Pink Pop",     hue: 325, pattern: "stripe",   glowPulse: true,  sparkle: true  },
+    { id: "mint",        name: "Mint",         hue: 155, pattern: "solid",    glowPulse: false, sparkle: false },
+    { id: "lava",        name: "Lava",         hue: 6,   pattern: "stripe",   glowPulse: true,  sparkle: true  },
+    { id: "mono",        name: "Mono",         hue: 0,   pattern: "mono",     glowPulse: false, sparkle: false },
+    { id: "aurora",      name: "Aurora",       hue: 170, pattern: "gradient", glowPulse: true,  sparkle: true  },
+    { id: "spectrum",    name: "Spectrum",     hue: 0,   pattern: "gradient", glowPulse: true,  sparkle: true  },
+  ];
+  function skinById(id) { return SKINS.find(s => s.id === id) || SKINS[0]; }
+
+  // =========================
+  // DOM (dynamic)
+  // =========================
+  document.body.style.margin = "0";
+  document.body.style.fontFamily = "system-ui, Arial";
+  document.body.style.background = "#070a12";
+  document.body.style.color = "#e9ecf5";
+  document.body.style.userSelect = "none";
+  document.body.style.overflow = "hidden";
+
+  const app = document.createElement("div");
+  app.style.position = "fixed";
+  app.style.inset = "0";
+  app.style.display = "grid";
+  app.style.gridTemplateColumns = "1fr 360px";
+  document.body.appendChild(app);
+
+  const left = document.createElement("div");
+  left.style.position = "relative";
+  left.style.overflow = "hidden";
+  left.style.background = "#070a12";
+  left.style.zIndex = "1";
+  app.appendChild(left);
+
+  const worldLayer = document.createElement("div");
+  worldLayer.style.position = "absolute";
+  worldLayer.style.left = "0";
+  worldLayer.style.top = "0";
+  worldLayer.style.width = CFG.worldW + "px";
+  worldLayer.style.height = CFG.worldH + "px";
+  worldLayer.style.transform = "translate(0px,0px) scale(1)";
+  worldLayer.style.willChange = "transform";
+  worldLayer.style.transformOrigin = "0 0";
+  worldLayer.style.background =
+    "radial-gradient(circle at 20% 10%, rgba(120,120,255,0.12), transparent 40%)," +
+    "radial-gradient(circle at 90% 80%, rgba(255,120,200,0.10), transparent 35%)," +
+    `linear-gradient(rgba(255,255,255,0.05) 1px, transparent 1px),` +
+    `linear-gradient(90deg, rgba(255,255,255,0.05) 1px, transparent 1px)`;
+  worldLayer.style.backgroundSize =
+    "auto, auto, " + CFG.gridSize + "px " + CFG.gridSize + "px, " + CFG.gridSize + "px " + CFG.gridSize + "px";
+  left.appendChild(worldLayer);
+
+  const hud = document.createElement("div");
+  hud.style.borderLeft = "1px solid rgba(255,255,255,0.08)";
+  hud.style.background = "rgba(255,255,255,0.02)";
+  hud.style.padding = "16px";
+  hud.style.display = "flex";
+  hud.style.flexDirection = "column";
+  hud.style.gap = "12px";
+  hud.style.position = "relative";
+  hud.style.zIndex = "50";
+  hud.style.pointerEvents = "auto";
+  app.appendChild(hud);
+
+  const header = document.createElement("div");
+  header.innerHTML = `
+    <div style="font-size:18px;font-weight:900;">DOM Slither (AI) — Ultimate</div>
+    <div style="opacity:.75;font-size:13px;margin-top:4px;">
+      Mouse steer OR WASD/Arrows • Space/Shift/Mouse = Boost • Power-ups • Skins
+    </div>
+  `;
+  hud.appendChild(header);
+
+  function card(title) {
+    const c = document.createElement("div");
+    c.style.background = "rgba(255,255,255,0.05)";
+    c.style.border = "1px solid rgba(255,255,255,0.08)";
+    c.style.borderRadius = "16px";
+    c.style.padding = "12px";
+    const h = document.createElement("div");
+    h.textContent = title;
+    h.style.fontWeight = "900";
+    h.style.marginBottom = "8px";
+    c.appendChild(h);
+    const b = document.createElement("div");
+    b.style.opacity = "0.95";
+    c.appendChild(b);
+    return { c, b };
+  }
+
+  const scoreCard = card("Score");
+  const statsCard = card("Stats");
+  const effectsCard = card("Effects");
+  const lbCard = card("Leaderboard");
+  const controlsCard = card("Controls");
+  hud.append(scoreCard.c, statsCard.c, effectsCard.c, lbCard.c, controlsCard.c);
+
+  controlsCard.b.innerHTML = `
+    <div>• <b>WASD / Arrows</b> to steer (keyboard)</div>
+    <div>• Mouse steering also works (if no keys pressed)</div>
+    <div>• Boost: <b>Space</b> / <b>Shift</b> / hold mouse</div>
+    <div>• Click arena = food burst</div>
+    <div>• P pause • R restart • Tab switch = auto pause</div>
+  `;
+
+  function makeBtn(text) {
+    const b = document.createElement("button");
+    b.textContent = text;
+    b.style.border = "1px solid rgba(255,255,255,0.18)";
+    b.style.background = "rgba(255,255,255,0.06)";
+    b.style.color = "#fff";
+    b.style.padding = "12px 12px";
+    b.style.borderRadius = "14px";
+    b.style.cursor = "pointer";
+    b.style.fontWeight = "800";
+    b.style.transition = "transform .12s ease, background .12s ease";
+    b.addEventListener("mouseenter", () => b.style.background = "rgba(255,255,255,0.10)");
+    b.addEventListener("mouseleave", () => b.style.background = "rgba(255,255,255,0.06)");
+    b.addEventListener("mousedown", () => b.style.transform = "scale(0.98)");
+    b.addEventListener("mouseup", () => b.style.transform = "scale(1)");
+    return b;
+  }
+
+  const btnRow = document.createElement("div");
+  btnRow.style.display = "grid";
+  btnRow.style.gridTemplateColumns = "1fr 1fr";
+  btnRow.style.gap = "10px";
+  hud.appendChild(btnRow);
+
+  const btnRestart = makeBtn("Restart");
+  const btnSettings = makeBtn("Settings");
+  btnRow.append(btnRestart, btnSettings);
+
+  const btnRow2 = document.createElement("div");
+  btnRow2.style.display = "grid";
+  btnRow2.style.gridTemplateColumns = "1fr 1fr";
+  btnRow2.style.gap = "10px";
+  hud.appendChild(btnRow2);
+
+  const btnAddAI = makeBtn("+AI");
+  const btnPause = makeBtn("Pause");
+  btnRow2.append(btnAddAI, btnPause);
+
+  // Minimap
+  const minimap = document.createElement("div");
+  minimap.style.position = "absolute";
+  minimap.style.left = "16px";
+  minimap.style.bottom = "16px";
+  minimap.style.width = "180px";
+  minimap.style.height = "120px";
+  minimap.style.borderRadius = "14px";
+  minimap.style.border = "1px solid rgba(255,255,255,0.12)";
+  minimap.style.background = "rgba(255,255,255,0.04)";
+  minimap.style.backdropFilter = "blur(6px)";
+  minimap.style.zIndex = "40";
+  minimap.style.pointerEvents = "none";
+  minimap.style.boxShadow = "0 14px 40px rgba(0,0,0,0.45)";
+  left.appendChild(minimap);
+
+  const minimapDotLayer = document.createElement("div");
+  minimapDotLayer.style.position = "absolute";
+  minimapDotLayer.style.inset = "10px";
+  minimapDotLayer.style.borderRadius = "10px";
+  minimapDotLayer.style.border = "1px solid rgba(255,255,255,0.08)";
+  minimapDotLayer.style.overflow = "hidden";
+  minimapDotLayer.style.position = "relative";
+  minimap.appendChild(minimapDotLayer);
+
+  // Kill feed
+  const killFeed = document.createElement("div");
+  killFeed.style.position = "absolute";
+  killFeed.style.right = "16px";
+  killFeed.style.bottom = "160px";
+  killFeed.style.width = "280px";
+  killFeed.style.display = "flex";
+  killFeed.style.flexDirection = "column";
+  killFeed.style.gap = "8px";
+  killFeed.style.zIndex = "45";
+  killFeed.style.pointerEvents = "none";
+  left.appendChild(killFeed);
+
+  function pushKill(text) {
+    const row = document.createElement("div");
+    row.style.padding = "10px 12px";
+    row.style.borderRadius = "14px";
+    row.style.background = "rgba(255,255,255,0.06)";
+    row.style.border = "1px solid rgba(255,255,255,0.10)";
+    row.style.backdropFilter = "blur(6px)";
+    row.style.opacity = "0";
+    row.style.transform = "translateY(8px)";
+    row.style.animation = "floatIn .18s ease forwards";
+    row.textContent = text;
+    killFeed.prepend(row);
+    setTimeout(() => { row.style.opacity = "0"; row.style.transform = "translateY(6px)"; }, 2200);
+    setTimeout(() => row.remove(), 2500);
+  }
+
+  // Overlays
+  function makeOverlayCard(titleText) {
+    const ov = document.createElement("div");
+    ov.style.position = "absolute";
+    ov.style.inset = "0";
+    ov.style.display = "none";
+    ov.style.placeItems = "center";
+    ov.style.background = "rgba(0,0,0,0.55)";
+    ov.style.backdropFilter = "blur(6px)";
+    ov.style.zIndex = "80";
+    ov.style.pointerEvents = "none";
+    const card = document.createElement("div");
+    card.style.width = "min(760px,92vw)";
+    card.style.background = "rgba(255,255,255,0.06)";
+    card.style.border = "1px solid rgba(255,255,255,0.12)";
+    card.style.borderRadius = "22px";
+    card.style.padding = "18px 18px";
+    card.style.boxShadow = "0 20px 60px rgba(0,0,0,0.5)";
+    card.innerHTML = `<div style="font-size:22px;font-weight:900;margin-bottom:10px;">${titleText}</div>`;
+    ov.appendChild(card);
+    left.appendChild(ov);
+    return { ov, card };
+  }
+  const startOverlay = makeOverlayCard("Start Game");
+  const settingsOverlay = makeOverlayCard("Settings");
+  const deathOverlay = makeOverlayCard("You crashed 💥");
+  const pauseOverlay = makeOverlayCard("Paused");
+
+  function showOverlay(ov) { ov.style.display = "grid"; ov.style.pointerEvents = "auto"; }
+  function hideOverlay(ov) { ov.style.display = "none"; ov.style.pointerEvents = "none"; }
+
+  // =========================
+  // Start/Settings UI helpers
+  // =========================
+  function makeRow(label, inputEl) {
+    const row = document.createElement("div");
+    row.style.display = "grid";
+    row.style.gridTemplateColumns = "190px 1fr";
+    row.style.gap = "12px";
+    row.style.alignItems = "center";
+    row.style.marginBottom = "10px";
+    const l = document.createElement("div");
+    l.textContent = label;
+    l.style.opacity = "0.85";
+    l.style.fontWeight = "700";
+    row.append(l, inputEl);
+    return row;
+  }
+  function makeInput() {
+    const i = document.createElement("input");
+    i.style.width = "100%";
+    i.style.padding = "12px 12px";
+    i.style.borderRadius = "14px";
+    i.style.border = "1px solid rgba(255,255,255,0.14)";
+    i.style.background = "rgba(255,255,255,0.06)";
+    i.style.color = "#fff";
+    i.style.outline = "none";
+    return i;
+  }
+  function makeSelect() {
+    const s = document.createElement("select");
+    s.style.width = "100%";
+    s.style.padding = "12px 12px";
+    s.style.borderRadius = "14px";
+    s.style.border = "1px solid rgba(255,255,255,0.14)";
+    s.style.background = "rgba(255,255,255,0.06)";
+    s.style.color = "#fff";
+    s.style.outline = "none";
+    return s;
+  }
+  function makeRange(min, max, step) {
+    const w = document.createElement("div");
+    w.style.display = "grid";
+    w.style.gridTemplateColumns = "1fr 70px";
+    w.style.gap = "10px";
+    w.style.alignItems = "center";
+    const r = document.createElement("input");
+    r.type = "range"; r.min = String(min); r.max = String(max); r.step = String(step);
+    const v = document.createElement("div");
+    v.style.textAlign = "right";
+    v.style.fontWeight = "900";
+    v.style.opacity = "0.95";
+    r.addEventListener("input", () => v.textContent = r.value);
+    w.append(r, v);
+    return { wrap: w, range: r, value: v };
+  }
+
+  // Persistent defaults
+  const savedName  = lsGet("slither_name", "Player");
+  const savedSkin  = lsGet("slither_skin", "aurora");
+  const savedAI    = Number(lsGet("slither_ai", String(BASE.aiCount)));
+  const savedFood  = Number(lsGet("slither_food", String(BASE.foodTarget)));
+  const savedAggro = Number(lsGet("slither_aggro", String(Math.round(BASE.aiAggro * 100))));
+  const savedZoom  = Number(lsGet("slither_zoom", String(Math.round(BASE.zoomMax * 100))));
+
+  // Start overlay content
+  const startBox = document.createElement("div");
+  startBox.style.marginTop = "10px";
+
+  const nameInput = makeInput(); nameInput.value = savedName;
+  const skinSelect = makeSelect();
+  for (const sk of SKINS) { const opt = document.createElement("option"); opt.value = sk.id; opt.textContent = sk.name; skinSelect.appendChild(opt); }
+  skinSelect.value = savedSkin;
+
+  const aiRange   = makeRange(0, 18, 1);
+  const foodRange = makeRange(180, 1000, 10);
+  const aggroRange= makeRange(0, 100, 1);
+  const zoomRange = makeRange(80, 135, 1);
+  aiRange.range.value = String(savedAI); aiRange.value.textContent = aiRange.range.value;
+  foodRange.range.value = String(savedFood); foodRange.value.textContent = foodRange.range.value;
+  aggroRange.range.value = String(savedAggro); aggroRange.value.textContent = aggroRange.range.value;
+  zoomRange.range.value = String(savedZoom); zoomRange.value.textContent = zoomRange.range.value;
+
+  const startBtn = makeBtn("Start");
+  const startHint = document.createElement("div");
+  startHint.style.opacity = "0.75";
+  startHint.style.marginTop = "10px";
+  startHint.style.fontSize = "13px";
+  startHint.innerHTML = `
+    <div><b>Steer:</b> WASD/Arrows or Mouse (if no keys)</div>
+    <div><b>Boost:</b> Space / Shift / Mouse Hold</div>
+    <div><b>Power-ups:</b> 🛡️ Shield • 🧲 Magnet • ✨ 2x Score</div>
+  `;
+  startBox.append(
+    makeRow("Player name", nameInput),
+    makeRow("Skin", skinSelect),
+    makeRow("AI enemies", aiRange.wrap),
+    makeRow("Food density", foodRange.wrap),
+    makeRow("AI aggressiveness", aggroRange.wrap),
+    makeRow("Max zoom (%)", zoomRange.wrap),
+    startBtn,
+    startHint
+  );
+  startOverlay.card.appendChild(startBox);
+
+  // Settings overlay content
+  const settingsBox = document.createElement("div");
+  settingsBox.style.marginTop = "10px";
+  const s_ai   = makeRange(0, 18, 1);
+  const s_food = makeRange(180, 1000, 10);
+  const s_aggro= makeRange(0, 100, 1);
+  const s_zoom = makeRange(80, 135, 1);
+
+  const applyBtn = makeBtn("Apply & Restart");
+  const closeBtn = makeBtn("Close");
+  closeBtn.style.background = "rgba(255,255,255,0.04)";
+
+  const settingsBtns = document.createElement("div");
+  settingsBtns.style.display = "grid";
+  settingsBtns.style.gridTemplateColumns = "1fr 1fr";
+  settingsBtns.style.gap = "10px";
+  settingsBtns.style.marginTop = "10px";
+  settingsBtns.append(applyBtn, closeBtn);
+
+  settingsBox.append(
+    makeRow("AI enemies", s_ai.wrap),
+    makeRow("Food density", s_food.wrap),
+    makeRow("AI aggressiveness", s_aggro.wrap),
+    makeRow("Max zoom (%)", s_zoom.wrap),
+    settingsBtns
+  );
+  settingsOverlay.card.appendChild(settingsBox);
+
+  // Death + Pause text
+  const deathText = document.createElement("div");
+  deathText.style.opacity = "0.9";
+  deathText.style.marginTop = "8px";
+  deathText.innerHTML = `Press <b>R</b> or click Restart`;
+  deathOverlay.card.appendChild(deathText);
+
+  const pauseText = document.createElement("div");
+  pauseText.style.opacity = "0.9";
+  pauseText.style.marginTop = "8px";
+  pauseText.innerHTML = `Press <b>P</b> to resume`;
+  pauseOverlay.card.appendChild(pauseText);
+
+  // =========================
+  // State
+  // =========================
+  const S = {
+    foods: new Map(),
+    snakes: new Map(),
+    powerups: new Map(),
+    playerId: null,
+
+    playerName: savedName,
+    skinId: savedSkin,
+
+    mouseX: 0,
+    mouseY: 0,
+    boosting: false,
+
+    score: 0,
+    bestScore: Number(lsGet("bestScore", "0")),
+
+    running: false,
+    paused: false,
+
+    lastT: now(),
+    lastBoostDropT: 0,
+    lastBoostCostT: 0,
+    lastSparkleT: 0,
+
+    effects: {
+      shield: false,
+      magnet: false,
+      double: false,
+      until: { shield: 0, magnet: 0, double: 0 }
+    },
+
+    fps: 60,
+    fpsFrames: 0,
+    fpsLastT: now(),
+
+    keys: { up:false, down:false, left:false, right:false }
+  };
+
+  // Camera
+  const camera = { x: 0, y: 0, vw: 0, vh: 0, zoom: 1 };
+  function measureViewport() { camera.vw = left.clientWidth; camera.vh = left.clientHeight; }
+  measureViewport();
+
+  // =========================
+  // Particles
+  // =========================
+  function spawnParticle(x, y, color, size=6, speedMin=70, speedMax=260, lifeMin=260, lifeMax=520) {
+    const p = document.createElement("div");
+    p.style.position = "absolute";
+    p.style.left = x + "px";
+    p.style.top = y + "px";
+    p.style.width = size + "px";
+    p.style.height = size + "px";
+    p.style.borderRadius = "999px";
+    p.style.background = color;
+    p.style.transform = "translate(-50%,-50%)";
+    p.style.pointerEvents = "none";
+    p.style.opacity = "1";
+    p.style.filter = "drop-shadow(0 0 14px rgba(255,255,255,0.25))";
+    worldLayer.appendChild(p);
+
+    const ang = rand(0, Math.PI * 2);
+    const spd = rand(speedMin, speedMax);
+    const life = rand(lifeMin, lifeMax);
+    const vx = Math.cos(ang) * spd;
+    const vy = Math.sin(ang) * spd;
+    const start = performance.now();
+
+    function tick(t) {
+      const dt = (t - start);
+      const k = dt / life;
+      if (k >= 1) { p.remove(); return; }
+      p.style.left = (x + vx * (dt/1000)) + "px";
+      p.style.top  = (y + vy * (dt/1000)) + "px";
+      p.style.opacity = String(1 - k);
+      requestAnimationFrame(tick);
+    }
+    requestAnimationFrame(tick);
+  }
+
+  function explosionAt(x, y, color) {
+    for (let i = 0; i < CFG.particleCountOnDeath; i++) {
+      spawnParticle(x + rand(-8,8), y + rand(-8,8), color, 6, 90, 320, 260, 560);
+    }
+  }
+
+  function sparkleTrailAt(x, y, baseColor) {
+    // tiny sparkles
+    const c1 = "rgba(255,255,255,0.95)";
+    const c2 = baseColor;
+    spawnParticle(x + rand(-4,4), y + rand(-4,4), Math.random()<0.55 ? c1 : c2, 4, 40, 120, 180, 320);
+    if (Math.random() < 0.35) spawnParticle(x + rand(-4,4), y + rand(-4,4), c1, 3, 40, 120, 160, 280);
+  }
+
+  // =========================
+  // Food
+  // =========================
+  let foodId = 0;
+  function spawnFood(x, y, size) {
+    const id = "f" + (++foodId);
+    const el = document.createElement("div");
+    el.style.position = "absolute";
+    el.style.width = size + "px";
+    el.style.height = size + "px";
+    el.style.borderRadius = "999px";
+    el.style.left = x + "px";
+    el.style.top = y + "px";
+    el.style.transform = "translate(-50%,-50%)";
+    el.style.background = hsl(randi(0, 360), 80, 60);
+    el.style.boxShadow = "0 0 18px rgba(255,255,255,0.12)";
+    el.style.pointerEvents = "none";
+    worldLayer.appendChild(el);
+
+    S.foods.set(id, { id, x, y, size, el });
+    return id;
+  }
+  function removeFood(id) {
+    const f = S.foods.get(id);
+    if (!f) return;
+    f.el.remove();
+    S.foods.delete(id);
+  }
+  function ensureFood() {
+    while (S.foods.size < CFG.foodTarget) {
+      spawnFood(
+        rand(CFG.padding, CFG.worldW - CFG.padding),
+        rand(CFG.padding, CFG.worldH - CFG.padding),
+        randi(CFG.foodMinSize, CFG.foodMaxSize)
+      );
+    }
+  }
+
+  // =========================
+  // Powerups
+  // =========================
+  let puId = 0;
+  const powerTypes = ["shield", "magnet", "double"];
+
+  function spawnPowerup() {
+    const type = powerTypes[randi(0, powerTypes.length - 1)];
+    const x = rand(CFG.padding, CFG.worldW - CFG.padding);
+    const y = rand(CFG.padding, CFG.worldH - CFG.padding);
+
+    const el = document.createElement("div");
+    el.style.position = "absolute";
+    el.style.left = x + "px";
+    el.style.top = y + "px";
+    el.style.width = CFG.powerupSize + "px";
+    el.style.height = CFG.powerupSize + "px";
+    el.style.borderRadius = "18px";
+    el.style.transform = "translate(-50%,-50%)";
+    el.style.pointerEvents = "none";
+    el.style.border = "1px solid rgba(255,255,255,0.18)";
+    el.style.background = "rgba(255,255,255,0.10)";
+    el.style.boxShadow = "0 0 36px rgba(255,255,255,0.14)";
+    el.style.display = "grid";
+    el.style.placeItems = "center";
+    el.style.fontWeight = "900";
+    el.style.fontSize = "18px";
+    el.textContent = type === "shield" ? "🛡️" : type === "magnet" ? "🧲" : "✨";
+    worldLayer.appendChild(el);
+
+    const id = "p" + (++puId);
+    S.powerups.set(id, { id, type, x, y, el });
+  }
+
+  function removePowerup(id) {
+    const p = S.powerups.get(id);
+    if (!p) return;
+    p.el.remove();
+    S.powerups.delete(id);
+  }
+
+  function ensurePowerups() {
+    while (S.powerups.size < CFG.powerupCount) spawnPowerup();
+  }
+
+  // =========================
+  // Snake rendering (skins)
+  // =========================
+  let snakeId = 0;
+
+  function segElForSnake(sn, isHead, index) {
+    const el = document.createElement("div");
+    el.style.position = "absolute";
+    el.style.width = CFG.segSize + "px";
+    el.style.height = CFG.segSize + "px";
+    el.style.borderRadius = "999px";
+    el.style.transform = "translate(-50%,-50%)";
+    el.style.pointerEvents = "none";
+
+    // Base color per pattern
+    if (sn.pattern === "mono") {
+      el.style.background = (index % 2 === 0) ? "rgba(255,255,255,0.92)" : "rgba(20,22,30,0.92)";
+      el.style.border = "1px solid rgba(255,255,255,0.10)";
+    } else if (sn.pattern === "stripe") {
+      el.style.background = sn.color;
+      el.style.filter = (index % 2 === 0) ? "brightness(1.07)" : "brightness(0.92)";
+    } else if (sn.pattern === "gradient") {
+      // will be set during renderSnake for animation
+      el.style.background = sn.color;
+    } else {
+      el.style.background = sn.color;
+    }
+
+    // shadow
+    el.style.boxShadow = "0 12px 20px rgba(0,0,0,0.35)";
+
+    // glow pulse
+    if (sn.glowPulse) {
+      el.style.animation = "glowPulse 1.6s ease-in-out infinite";
+    }
+
+    // head styling
+    if (isHead) {
+      el.style.outline = "2px solid rgba(255,255,255,0.92)";
+      el.style.boxShadow =
+        "0 0 0 6px rgba(120,160,255,0.16), 0 0 22px rgba(255,255,255,0.14), 0 12px 22px rgba(0,0,0,0.45)";
+      el.style.animation = sn.glowPulse ? "glowPulse 1.2s ease-in-out infinite" : "";
+    }
+
+    return el;
+  }
+
+  function safeSpawn() {
+    for (let t = 0; t < 160; t++) {
+      const x = rand(260, CFG.worldW - 260);
+      const y = rand(260, CFG.worldH - 260);
+      let ok = true;
+      for (const sn of S.snakes.values()) {
+        if (!sn.alive) continue;
+        const h = sn.points[0];
+        if (dist2(x, y, h.x, h.y) < 260*260) { ok = false; break; }
+      }
+      if (ok) return { x, y };
+    }
+    return { x: CFG.worldW/2, y: CFG.worldH/2 };
+  }
+
+  function createSnake({ isPlayer, len, skin, displayName }) {
+    const id = "s" + (++snakeId);
+    const p = safeSpawn();
+    const a = rand(0, Math.PI * 2);
+
+    const points = [];
+    for (let i = 0; i < len; i++) {
+      points.push({
+        x: p.x - Math.cos(a) * i * CFG.segSpacing,
+        y: p.y - Math.sin(a) * i * CFG.segSpacing
+      });
+    }
+
+    const sn = {
+      id,
+      isPlayer,
+      name: displayName || (isPlayer ? "YOU" : "AI"),
+      hue: skin.hue,
+      color: hsl(skin.hue, 85, 55),
+      pattern: skin.pattern,
+      glowPulse: !!skin.glowPulse,
+      sparkle: !!skin.sparkle,
+
+      points,
+      els: [],
+
+      angle: a,
+      targetAngle: a,
+      speed: CFG.baseSpeed,
+      alive: true,
+      grow: 0,
+
+      // For animated gradient skins
+      hueOffset: rand(0, 360),
+
+      // AI
+      thinkAt: now() + rand(CFG.aiThinkEveryMs[0], CFG.aiThinkEveryMs[1]),
+      focusFood: null,
+      jitter: rand(0, Math.PI*2)
+    };
+
+    // create initial elements
+    for (let i = 0; i < points.length; i++) {
+      const el = segElForSnake(sn, i === 0, i);
+      worldLayer.appendChild(el);
+      sn.els.push(el);
+    }
+
+    S.snakes.set(id, sn);
+    if (isPlayer) S.playerId = id;
+    return sn;
+  }
+
+  // Bulletproof segments sync + render
+  function ensureSegments(sn) {
+    while (sn.els.length < sn.points.length) {
+      const i = sn.els.length;
+      const el = segElForSnake(sn, false, i);
+      worldLayer.appendChild(el);
+      sn.els.push(el);
+    }
+    while (sn.els.length > sn.points.length) {
+      const el = sn.els.pop();
+      if (el) el.remove();
+    }
+    // ensure head style stays
+    if (sn.els[0]) {
+      sn.els[0].style.outline = "2px solid rgba(255,255,255,0.92)";
+      sn.els[0].style.boxShadow =
+        "0 0 0 6px rgba(120,160,255,0.16), 0 0 22px rgba(255,255,255,0.14), 0 12px 22px rgba(0,0,0,0.45)";
+    }
+  }
+
+  function renderSnake(sn, tNow) {
+    ensureSegments(sn);
+
+    // animated gradient: shift hue slowly
+    if (sn.pattern === "gradient") {
+      sn.hueOffset = (sn.hueOffset + 0.55) % 360;
+    }
+
+    for (let i = 0; i < sn.points.length; i++) {
+      const p = sn.points[i];
+      const el = sn.els[i];
+      if (!el) continue;
+
+      el.style.left = p.x + "px";
+      el.style.top  = p.y + "px";
+
+      if (sn.pattern === "gradient") {
+        const hue = (sn.hueOffset + i * 6) % 360;
+        el.style.background = hsl(hue, 90, (i===0 ? 58 : 54));
+      }
+    }
+  }
+
+  // =========================
+  // AI
+  // =========================
+  function steer(current, target, maxDelta) {
+    let diff = angleNorm(target - current);
+    diff = clamp(diff, -maxDelta, maxDelta);
+    return current + diff;
+  }
+
+  function nearestFood(x, y) {
+    let best = null, bestD = Infinity;
+    for (const f of S.foods.values()) {
+      const d = dist2(x, y, f.x, f.y);
+      if (d < bestD) { bestD = d; best = f; }
+    }
+    return best;
+  }
+
+  function aiThink(sn) {
+    const head = sn.points[0];
+    const player = S.snakes.get(S.playerId);
+
+    const chase = player && player.alive && Math.random() < CFG.aiAggro;
+    let gx, gy;
+
+    if (chase) {
+      const ph = player.points[0];
+      gx = ph.x + Math.cos(player.angle) * 60;
+      gy = ph.y + Math.sin(player.angle) * 60;
+    } else {
+      if (!sn.focusFood || !S.foods.has(sn.focusFood)) {
+        const f = nearestFood(head.x, head.y);
+        sn.focusFood = f ? f.id : null;
+      }
+      const f = sn.focusFood ? S.foods.get(sn.focusFood) : null;
+      gx = f ? f.x : CFG.worldW / 2;
+      gy = f ? f.y : CFG.worldH / 2;
+    }
+
+    let desired = Math.atan2(gy - head.y, gx - head.x);
+
+    // wall repulsion
+    const pad = CFG.padding + 110;
+    let ax = 0, ay = 0;
+    if (head.x < pad) ax += (pad - head.x) / pad;
+    if (head.x > CFG.worldW - pad) ax -= (head.x - (CFG.worldW - pad)) / pad;
+    if (head.y < pad) ay += (pad - head.y) / pad;
+    if (head.y > CFG.worldH - pad) ay -= (head.y - (CFG.worldH - pad)) / pad;
+
+    // body avoidance
+    if (Math.random() < CFG.aiAvoid) {
+      for (const other of S.snakes.values()) {
+        if (!other.alive) continue;
+        const pts = other.points;
+        const start = (other === sn) ? 14 : 2;
+        for (let i = start; i < pts.length; i += 7) {
+          const p = pts[i];
+          const d = dist2(head.x, head.y, p.x, p.y);
+          if (d < 95*95) {
+            const dx = head.x - p.x;
+            const dy = head.y - p.y;
+            const inv = 1 / Math.max(0.0001, d);
+            ax += dx * inv * 1500;
+            ay += dy * inv * 1500;
+          }
+        }
+      }
+    }
+
+    // jitter
+    sn.jitter += rand(-0.75, 0.75);
+    const jx = Math.cos(sn.jitter) * 0.18;
+    const jy = Math.sin(sn.jitter) * 0.18;
+
+    const vx = Math.cos(desired) + ax + jx;
+    const vy = Math.sin(desired) + ay + jy;
+    sn.targetAngle = Math.atan2(vy, vx);
+
+    // boost near player sometimes
+    if (player && player.alive) {
+      const ph = player.points[0];
+      const d = dist2(head.x, head.y, ph.x, ph.y);
+      sn.speed = (d < 280*280 && Math.random() < 0.33) ? CFG.boostSpeed : CFG.baseSpeed;
+    } else {
+      sn.speed = CFG.baseSpeed;
+    }
+  }
+
+  // =========================
+  // Collision / Death
+  // =========================
+  function dropFoodFromSnake(sn) {
+    const count = Math.min(CFG.maxFoodOnDeath, Math.floor(sn.points.length * 0.85));
+    for (let i = 0; i < count; i++) {
+      const idx = randi(0, sn.points.length - 1);
+      const p = sn.points[idx];
+      spawnFood(
+        clamp(p.x + rand(-12, 12), CFG.padding, CFG.worldW - CFG.padding),
+        clamp(p.y + rand(-12, 12), CFG.padding, CFG.worldH - CFG.padding),
+        randi(CFG.foodMinSize, CFG.foodMaxSize + 2)
+      );
+    }
+  }
+
+  function headHitsBodies(sn) {
+    const head = sn.points[0];
+    const r2 = CFG.headRadius * CFG.headRadius;
+
+    for (const other of S.snakes.values()) {
+      if (!other.alive) continue;
+      const pts = other.points;
+      const start = (other === sn) ? 14 : 0;
+      for (let i = start; i < pts.length; i++) {
+        const p = pts[i];
+        if (dist2(head.x, head.y, p.x, p.y) <= r2) return true;
+      }
+    }
+    return false;
+  }
+
+  function killSnake(sn, isPlayer) {
+    if (!sn.alive) return;
+
+    // Shield saves player once
+    if (isPlayer && S.effects.shield) {
+      S.effects.shield = false;
+      pushKill("🛡️ Shield saved you!");
+      if (sn.points.length > 20) {
+        sn.points.splice(-8);
+        for (let i = 0; i < 8; i++) {
+          const el = sn.els.pop();
+          if (el) el.remove();
+        }
+      }
+      return;
+    }
+
+    sn.alive = false;
+    const head = sn.points[0];
+    explosionAt(head.x, head.y, sn.color);
+    dropFoodFromSnake(sn);
+
+    for (const el of sn.els) {
+      el.style.transition = "opacity .25s ease, transform .25s ease, filter .25s ease";
+      el.style.opacity = "0";
+      el.style.transform = "translate(-50%,-50%) scale(1.16)";
+      el.style.filter = "blur(2px)";
+    }
+
+    if (isPlayer) {
+      pushKill(`${S.playerName} crashed 💥`);
+      showOverlay(deathOverlay.ov);
+      S.running = false;
+      S.paused = false;
+    } else {
+      pushKill("AI crashed 💥");
+      setTimeout(() => {
+        for (const el of sn.els) el.remove();
+        S.snakes.delete(sn.id);
+
+        const randomSkin = SKINS[randi(0, SKINS.length - 1)];
+        createSnake({
+          isPlayer: false,
+          len: CFG.aiLen + randi(-3, 12),
+          skin: randomSkin,
+          displayName: "AI"
+        });
+      }, CFG.respawnDelayMs);
+    }
+  }
+
+  // =========================
+  // Camera / Zoom
+  // =========================
+  function updateCamera() {
+    const player = S.snakes.get(S.playerId);
+    if (!player || !player.alive) return;
+
+    const h = player.points[0];
+
+    const zoomMax = Math.max(0.9, CFG.zoomMax);
+    let targetZoom = clamp(1.12 - (player.points.length / 260), CFG.zoomMin, zoomMax);
+    camera.zoom += (targetZoom - camera.zoom) * CFG.zoomLerp;
+
+    const zvw = camera.vw / camera.zoom;
+    const zvh = camera.vh / camera.zoom;
+
+    camera.x = clamp(h.x - zvw / 2, 0, CFG.worldW - zvw);
+    camera.y = clamp(h.y - zvh / 2, 0, CFG.worldH - zvh);
+
+    worldLayer.style.transform = `translate(${-camera.x}px, ${-camera.y}px) scale(${camera.zoom})`;
+  }
+
+  // =========================
+  // Leaderboard & Minimap
+  // =========================
+  function renderLeaderboard() {
+    const list = [...S.snakes.values()]
+      .filter(s => s.alive)
+      .sort((a, b) => b.points.length - a.points.length)
+      .slice(0, 8);
+
+    lbCard.b.innerHTML = list.map((s, i) => {
+      const name = s.isPlayer ? `${S.playerName} (YOU)` : "AI";
+      return `
+        <div style="display:flex;justify-content:space-between;gap:10px;">
+          <div>${i+1}. <span style="color:${s.color};font-weight:900;">${name}</span></div>
+          <div style="font-weight:900;">${s.points.length}</div>
+        </div>
+      `;
+    }).join("");
+  }
+
+  function renderMinimap() {
+    minimapDotLayer.innerHTML = "";
+    const w = minimapDotLayer.clientWidth;
+    const h = minimapDotLayer.clientHeight;
+
+    for (const sn of S.snakes.values()) {
+      if (!sn.alive) continue;
+      const head = sn.points[0];
+      const dx = (head.x / CFG.worldW) * w;
+      const dy = (head.y / CFG.worldH) * h;
+
+      const dot = document.createElement("div");
+      dot.style.position = "absolute";
+      dot.style.left = dx + "px";
+      dot.style.top = dy + "px";
+      dot.style.width = sn.isPlayer ? "8px" : "6px";
+      dot.style.height = sn.isPlayer ? "8px" : "6px";
+      dot.style.transform = "translate(-50%,-50%)";
+      dot.style.borderRadius = "999px";
+      dot.style.background = sn.isPlayer ? "#ffffff" : sn.color;
+      dot.style.opacity = sn.isPlayer ? "1" : "0.9";
+      minimapDotLayer.appendChild(dot);
+    }
+  }
+
+  // =========================
+  // FPS
+  // =========================
+  function updateFps(t) {
+    S.fpsFrames++;
+    if (t - S.fpsLastT >= 500) {
+      const inst = S.fpsFrames * 1000 / (t - S.fpsLastT);
+      S.fps += (inst - S.fps) * CFG.fpsSmoothing;
+      S.fpsFrames = 0;
+      S.fpsLastT = t;
+    }
+  }
+
+  // =========================
+  // Movement input (WASD/Arrows + mouse fallback)
+  // =========================
+  function keyVector() {
+    let dx = 0, dy = 0;
+    if (S.keys.left)  dx -= 1;
+    if (S.keys.right) dx += 1;
+    if (S.keys.up)    dy -= 1;
+    if (S.keys.down)  dy += 1;
+    if (dx === 0 && dy === 0) return null;
+    const len = Math.hypot(dx, dy) || 1;
+    return { dx: dx/len, dy: dy/len };
+  }
+
+  // =========================
+  // Update loop
+  // =========================
+  function update(dt) {
+    ensureFood();
+    ensurePowerups();
+
+    const tNow = now();
+
+    // effect timers
+    for (const k of ["shield","magnet","double"]) {
+      if (S.effects[k] && tNow > S.effects.until[k]) S.effects[k] = false;
+    }
+
+    // UI score + best
+    S.bestScore = Math.max(S.bestScore, S.score);
+    lsSet("bestScore", String(S.bestScore));
+
+    scoreCard.b.innerHTML = `
+      <div style="font-size:30px;font-weight:900;">${S.score}</div>
+      <div style="opacity:.75;">Best: <b>${S.bestScore}</b></div>
+    `;
+
+    const player = S.snakes.get(S.playerId);
+    if (player) {
+      statsCard.b.innerHTML = `
+        <div>Name: <b>${S.playerName}</b></div>
+        <div>Skin: <b>${skinById(S.skinId).name}</b></div>
+        <div>Length: <b>${player.points.length}</b></div>
+        <div>Enemies: <b>${[...S.snakes.values()].filter(s=>!s.isPlayer && s.alive).length}</b></div>
+        <div>Boost: <b>${S.boosting ? "ON" : "OFF"}</b></div>
+        <div>FPS: <b>${S.fps.toFixed(0)}</b></div>
+      `;
+    }
+
+    effectsCard.b.innerHTML = `
+      <div>🛡️ Shield: <b>${S.effects.shield ? "ON" : "off"}</b></div>
+      <div>🧲 Magnet: <b>${S.effects.magnet ? "ON" : "off"}</b></div>
+      <div>✨ 2x Score: <b>${S.effects.double ? "ON" : "off"}</b></div>
+    `;
+
+    // AI Think
+    for (const sn of S.snakes.values()) {
+      if (!sn.alive || sn.isPlayer) continue;
+      if (tNow >= sn.thinkAt) {
+        aiThink(sn);
+        sn.thinkAt = tNow + rand(CFG.aiThinkEveryMs[0], CFG.aiThinkEveryMs[1]);
+      }
+    }
+
+    // Player target angle from keyboard or mouse
+    if (player && player.alive) {
+      const v = keyVector();
+      if (v) {
+        player.targetAngle = Math.atan2(v.dy, v.dx);
+      } else {
+        const px = camera.x + (S.mouseX / camera.zoom);
+        const py = camera.y + (S.mouseY / camera.zoom);
+        const head = player.points[0];
+        player.targetAngle = Math.atan2(py - head.y, px - head.x);
+      }
+      player.speed = S.boosting ? CFG.boostSpeed : CFG.baseSpeed;
+    }
+
+    // Move snakes
+    for (const sn of S.snakes.values()) {
+      if (!sn.alive) continue;
+
+      const maxTurn = CFG.turnSpeed * dt;
+      sn.angle = steer(sn.angle, sn.targetAngle, maxTurn);
+
+      const step = sn.speed * dt;
+      const head = sn.points[0];
+
+      let nx = head.x + Math.cos(sn.angle) * step;
+      let ny = head.y + Math.sin(sn.angle) * step;
+
+      nx = clamp(nx, CFG.padding, CFG.worldW - CFG.padding);
+      ny = clamp(ny, CFG.padding, CFG.worldH - CFG.padding);
+
+      sn.points.unshift({ x: nx, y: ny });
+
+      // eat food
+      const eatR2 = CFG.eatRadius * CFG.eatRadius;
+      for (const f of S.foods.values()) {
+        if (dist2(nx, ny, f.x, f.y) <= eatR2) {
+          removeFood(f.id);
+          sn.grow += 1;
+          if (sn.isPlayer) S.score += (S.effects.double ? 2 : 1);
+          break;
+        }
+      }
+
+      // powerup pickup (player only) - bigger radius
+      if (sn.isPlayer) {
+        const pr2 = 30 * 30;
+        for (const p of S.powerups.values()) {
+          if (dist2(nx, ny, p.x, p.y) <= pr2) {
+            removePowerup(p.id);
+            const end = now() + CFG.powerupDurationMs;
+            S.effects[p.type] = true;
+            S.effects.until[p.type] = end;
+            pushKill(`Picked: ${p.type.toUpperCase()}`);
+            break;
+          }
+        }
+      }
+
+      // magnet pulls food
+      if (sn.isPlayer && S.effects.magnet) {
+        for (const f of S.foods.values()) {
+          const d = dist2(nx, ny, f.x, f.y);
+          if (d < 185*185) {
+            const dx = nx - f.x;
+            const dy = ny - f.y;
+            f.x += dx * 0.022;
+            f.y += dy * 0.022;
+            f.el.style.left = f.x + "px";
+            f.el.style.top  = f.y + "px";
+          }
+        }
+      }
+
+      // boost cost & drop (player only)
+      if (sn.isPlayer && S.boosting && sn.points.length > 12) {
+        if (tNow - S.lastBoostDropT >= CFG.boostDropEveryMs) {
+          S.lastBoostDropT = tNow;
+          const back = sn.points[Math.min(9, sn.points.length - 1)];
+          spawnFood(
+            clamp(back.x + rand(-10, 10), CFG.padding, CFG.worldW - CFG.padding),
+            clamp(back.y + rand(-10, 10), CFG.padding, CFG.worldH - CFG.padding),
+            randi(4, 6)
+          );
+        }
+        if (tNow - S.lastBoostCostT >= CFG.boostCostEveryMs) {
+          S.lastBoostCostT = tNow;
+          if (Math.random() < 0.62 && sn.points.length > 16) {
+            sn.points.pop();
+            const el = sn.els.pop();
+            if (el) el.remove();
+          }
+        }
+
+        // Sparkle trail for skins that support it
+        if (sn.sparkle && (tNow - S.lastSparkleT >= CFG.sparkleTrailEveryMs)) {
+          S.lastSparkleT = tNow;
+          const back = sn.points[Math.min(10, sn.points.length - 1)];
+          sparkleTrailAt(back.x, back.y, sn.color);
+        }
+      }
+
+      // tail follow
+      if (sn.grow > 0) sn.grow -= 1;
+      else sn.points.pop();
+
+      renderSnake(sn, tNow);
+
+      // collision
+      if (headHitsBodies(sn)) killSnake(sn, sn.isPlayer);
+    }
+
+    updateCamera();
+    renderLeaderboard();
+    renderMinimap();
+  }
+
+  // =========================
+  // Loop
+  // =========================
+  function loop() {
+    const t = now();
+    updateFps(t);
+
+    let dt = (t - S.lastT) / 1000;
+    S.lastT = t;
+    dt = Math.min(dt, 0.033);
+
+    if (S.running && !S.paused) update(dt);
+    requestAnimationFrame(loop);
+  }
+
+  // =========================
+  // Apply settings
+  // =========================
+  function applySettingsFromUI({ fromStart }) {
+    const nm = (fromStart ? nameInput.value : S.playerName).trim() || "Player";
+    const skId = fromStart ? skinSelect.value : S.skinId;
+
+    const ai = Number(fromStart ? aiRange.range.value : s_ai.range.value);
+    const food = Number(fromStart ? foodRange.range.value : s_food.range.value);
+    const aggroPct = Number(fromStart ? aggroRange.range.value : s_aggro.range.value);
+    const zoomPct = Number(fromStart ? zoomRange.range.value : s_zoom.range.value);
+
+    S.playerName = nm;
+    S.skinId = skId;
+
+    lsSet("slither_name", nm);
+    lsSet("slither_skin", skId);
+    lsSet("slither_ai", ai);
+    lsSet("slither_food", food);
+    lsSet("slither_aggro", aggroPct);
+    lsSet("slither_zoom", zoomPct);
+
+    CFG = { ...BASE };
+    CFG.aiCount = clamp(ai, 0, 18);
+    CFG.foodTarget = clamp(food, 180, 1000);
+    CFG.aiAggro = clamp(aggroPct / 100, 0, 1);
+    CFG.zoomMax = clamp(zoomPct / 100, 0.8, 1.35);
+
+    worldLayer.style.width = CFG.worldW + "px";
+    worldLayer.style.height = CFG.worldH + "px";
+    worldLayer.style.backgroundSize =
+      "auto, auto, " + CFG.gridSize + "px " + CFG.gridSize + "px, " + CFG.gridSize + "px " + CFG.gridSize + "px";
+  }
+
+  function openSettings() {
+    if (!S.running) return;
+
+    s_ai.range.value = String(CFG.aiCount); s_ai.value.textContent = s_ai.range.value;
+    s_food.range.value = String(CFG.foodTarget); s_food.value.textContent = s_food.range.value;
+    s_aggro.range.value = String(Math.round(CFG.aiAggro * 100)); s_aggro.value.textContent = s_aggro.range.value;
+    s_zoom.range.value = String(Math.round(CFG.zoomMax * 100)); s_zoom.value.textContent = s_zoom.range.value;
+
+    showOverlay(settingsOverlay.ov);
+  }
+
+  // =========================
+  // Pause
+  // =========================
+  function togglePause(forcePause) {
+    if (!S.running) return;
+    const next = (typeof forcePause === "boolean") ? forcePause : !S.paused;
+    S.paused = next;
+    S.boosting = false;
+    btnPause.textContent = S.paused ? "Resume" : "Pause";
+    if (S.paused) showOverlay(pauseOverlay.ov);
+    else hideOverlay(pauseOverlay.ov);
+  }
+
+  // =========================
+  // Start / Restart
+  // =========================
+  function clearWorld() {
+    for (const f of S.foods.values()) f.el.remove();
+    S.foods.clear();
+
+    for (const p of S.powerups.values()) p.el.remove();
+    S.powerups.clear();
+
+    for (const sn of S.snakes.values()) for (const el of sn.els) el.remove();
+    S.snakes.clear();
+
+    minimapDotLayer.innerHTML = "";
+    killFeed.innerHTML = "";
+  }
+
+  function startWorld() {
+    hideOverlay(deathOverlay.ov);
+    S.running = true;
+    S.paused = false;
+    btnPause.textContent = "Pause";
+
+    S.score = 0;
+    S.boosting = false;
+    S.lastBoostDropT = 0;
+    S.lastBoostCostT = 0;
+    S.lastSparkleT = 0;
+
+    S.effects.shield = false;
+    S.effects.magnet = false;
+    S.effects.double = false;
+
+    // spawn food
+    for (let i = 0; i < CFG.foodTarget; i++) {
+      spawnFood(
+        rand(CFG.padding, CFG.worldW - CFG.padding),
+        rand(CFG.padding, CFG.worldH - CFG.padding),
+        randi(CFG.foodMinSize, CFG.foodMaxSize)
+      );
+    }
+
+    // powerups
+    for (let i = 0; i < CFG.powerupCount; i++) spawnPowerup();
+
+    // player
+    const sk = skinById(S.skinId);
+    createSnake({
+      isPlayer: true,
+      len: CFG.initialLen,
+      skin: sk,
+      displayName: S.playerName
+    });
+
+    // AI
+    for (let i = 0; i < CFG.aiCount; i++) {
+      const aiSkin = SKINS[randi(0, SKINS.length - 1)];
+      createSnake({
+        isPlayer: false,
+        len: CFG.aiLen + randi(-3, 12),
+        skin: aiSkin,
+        displayName: "AI"
+      });
+    }
+
+    updateCamera();
+    renderLeaderboard();
+    renderMinimap();
+    pushKill("Game started");
+  }
+
+  function restart() {
+    clearWorld();
+    startWorld();
+  }
+
+  // =========================
+  // Events
+  // =========================
+  left.addEventListener("mousemove", (e) => {
+    const r = left.getBoundingClientRect();
+    S.mouseX = e.clientX - r.left;
+    S.mouseY = e.clientY - r.top;
+  });
+
+  left.addEventListener("mousedown", () => { if (S.running && !S.paused) S.boosting = true; });
+  window.addEventListener("mouseup", () => { S.boosting = false; });
+
+  left.addEventListener("click", (e) => {
+    if (!S.running || S.paused) return;
+    const r = left.getBoundingClientRect();
+    const sx = (e.clientX - r.left) / camera.zoom;
+    const sy = (e.clientY - r.top) / camera.zoom;
+    const x = camera.x + sx;
+    const y = camera.y + sy;
+    for (let i = 0; i < 12; i++) {
+      spawnFood(
+        clamp(x + rand(-30, 30), CFG.padding, CFG.worldW - CFG.padding),
+        clamp(y + rand(-30, 30), CFG.padding, CFG.worldH - CFG.padding),
+        randi(4, 9)
+      );
+    }
+  });
+
+  left.addEventListener("contextmenu", (e) => e.preventDefault());
+
+  function setKey(e, isDown) {
+    const k = e.key.toLowerCase();
+    if (k === "w" || e.key === "ArrowUp") S.keys.up = isDown;
+    if (k === "s" || e.key === "ArrowDown") S.keys.down = isDown;
+    if (k === "a" || e.key === "ArrowLeft") S.keys.left = isDown;
+    if (k === "d" || e.key === "ArrowRight") S.keys.right = isDown;
+  }
+
+  window.addEventListener("keydown", (e) => {
+    if (e.key === " ") { e.preventDefault(); if (S.running && !S.paused) S.boosting = true; }
+    if (e.key === "Shift") { if (S.running && !S.paused) S.boosting = true; }
+
+    if (e.key.toLowerCase() === "r") restart();
+    if (e.key.toLowerCase() === "p") togglePause();
+
+    setKey(e, true);
+  });
+
+  window.addEventListener("keyup", (e) => {
+    if (e.key === " " || e.key === "Shift") S.boosting = false;
+    setKey(e, false);
+  });
+
+  window.addEventListener("resize", () => measureViewport());
+
+  document.addEventListener("visibilitychange", () => {
+    if (!S.running) return;
+    if (document.hidden) { if (!S.paused) togglePause(true); }
+  });
+
+  btnRestart.addEventListener("click", () => restart());
+  btnAddAI.addEventListener("click", () => {
+    if (!S.running) return;
+    const aiSkin = SKINS[randi(0, SKINS.length - 1)];
+    createSnake({
+      isPlayer: false,
+      len: CFG.aiLen + randi(-2, 12),
+      skin: aiSkin,
+      displayName: "AI"
+    });
+    pushKill("Spawned +AI");
+  });
+
+  btnPause.addEventListener("click", () => togglePause());
+  btnSettings.addEventListener("click", () => openSettings());
+
+  closeBtn.addEventListener("click", () => hideOverlay(settingsOverlay.ov));
+  applyBtn.addEventListener("click", () => {
+    applySettingsFromUI({ fromStart: false });
+    hideOverlay(settingsOverlay.ov);
+    restart();
+  });
+
+  startBtn.addEventListener("click", () => {
+    applySettingsFromUI({ fromStart: true });
+    hideOverlay(startOverlay.ov);
+    restart();
+  });
+
+  nameInput.addEventListener("keydown", (e) => { if (e.key === "Enter") startBtn.click(); });
+
+  // =========================
+  // Init
+  // =========================
+  applySettingsFromUI({ fromStart: true });
+  showOverlay(startOverlay.ov);
+
+  S.lastT = now();
+  requestAnimationFrame(loop);
+
+})();
+</script>
+</body>
+</html>
